@@ -141,10 +141,29 @@ walkaddr(pagetable_t pagetable, uint64 va)
 }
 
 
-#if defined(LAB_PGTBL) || defined(SOL_MMAP) || defined(SOL_COW)
+#if defined(LAB_PGTBL) || defined(SOL_MMAP) || defined(SOL_COW) //SKOMPILUJE IBA VTEDY AK SI V BRANCHOCH TYCHTO
 void
-vmprint(pagetable_t pagetable) {
+do_vmprint(pagetable_t pagetable, int level, uint64 start_va){
+  char *s = " .. .. .."; // RETAZEC NA ODSADENIE VYPISU
+  uint64 mult[] = {1, 512, 512*512}; //POMAHA URCIT O KOLKO SA VA POSUVA AK SME LVL2 TAK O 0 LVL1 TAK O 512 LEBO 512 ZAZNAMOV LVL0 512*512
+
+  for(int i=0; i<512; i++) { //LEBO 512 ZAZNAMOV
+    if((pagetable[i] & PTE_V) == 0) { //PTE PAGETABLEENTRY_VALID
+      continue;
+      }
+    uint64 va = start_va + mult[level] * PGSIZE * i; // POSUN VA PODLA UROVNE A INDEXU PGSIZE VELKOST 1 STRANKY = 4KB
+    printf("%s%p: pte %p pa %p\n", s + level * 3, (void*)va, (void*)pagetable[i], (void*)PTE2PA(pagetable[i])); //VA, HODNOTA PTE, FA PTE
+    if(level) { // KONTROLUJ CI NIESI NA LEVELI 0
+      do_vmprint((pagetable_t)PTE2PA(pagetable[i]), level - 1, va); //OPAKUJ A CHOD O LEVEL NIZSIE
+    }
+  }
+}
+void
+vmprint(pagetable_t pagetable) { // UKAZUJE NA ZACIATOK PAGETABLE
   // your code here
+  printf("page table %p\n", pagetable); //VYPIS ADRESU ZACIATKU FYZICKEJ ADRESY
+  do_vmprint(pagetable, 2, 0); // PAGETABLE, LEVEL, ZACIATOK VIRTUALNEJ ADRESY(VA ZACINA 0 FA NIE)
+
 }
 #endif
 
