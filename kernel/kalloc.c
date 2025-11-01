@@ -9,10 +9,14 @@
 #include "riscv.h"
 #include "defs.h"
 
+#define PPN_CNT ((PHYSTOP - KERNBASE) / PGSIZE)
+#define PA2IND(pa) (((uint64)(pa) - KERNBASE) / PGSIZE)
 void freerange(void *pa_start, void *pa_end);
 
 extern char end[]; // first address after kernel.
                    // defined by kernel.ld.
+
+char *new_end;
 
 struct run {
   struct run *next;
@@ -21,13 +25,22 @@ struct run {
 struct {
   struct spinlock lock;
   struct run *freelist;
+  char *refs;
 } kmem;
+
+void*
+initref(){
+  kmem.refs = end;
+  new_end = kmem.refs + PPN_CNT;
+  memset(kmem.refs, 1, PPN_CNT);
+  return new_end;
+}
 
 void
 kinit()
 {
   initlock(&kmem.lock, "kmem");
-  freerange(end, (void*)PHYSTOP);
+  freerange(initref(), (void*)PHYSTOP);
 }
 
 void
@@ -48,15 +61,25 @@ kfree(void *pa)
 {
   struct run *r;
 
-  if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
+  if(((uint64)pa % PGSIZE) != 0 || (char*)pa < new_end || (uint64)pa >= PHYSTOP)
     panic("kfree");
 
   // Fill with junk to catch dangling refs.
-  memset(pa, 1, PGSIZE);
+  //memset(pa, 1, PGSIZE); // TOTO ODSTRANUJEME
 
-  r = (struct run*)pa;
+  //r = (struct run*)pa;
 
   acquire(&kmem.lock);
+  kmem.refs[PA2IND(pa)]--;
+  if(kmem.refs[PA2IND(pa)] > 0) {
+    release(&kmem.lock);
+    return;
+  } else if (kmem.refs[PA2IND(pa)] < 0){
+    panic("kfree: underflow");
+  }
+
+  memset(pa, 1, PGSIZE); // TOTO ODSTRANUJEME
+  r = (struct run*)pa;
   r->next = kmem.freelist;
   kmem.freelist = r;
   release(&kmem.lock);
@@ -72,11 +95,27 @@ kalloc(void)
 
   acquire(&kmem.lock);
   r = kmem.freelist;
-  if(r)
+  if(r){
+    kmem.refs[PA2IND(r)]++;
+    if(kmem.refs[PA2IND(r)] != 1){
+      panic("kalloc: refcnt != 1");
+    }
     kmem.freelist = r->next;
+    }
   release(&kmem.lock);
 
   if(r)
     memset((char*)r, 5, PGSIZE); // fill with junk
   return (void*)r;
+}
+
+void
+getref(void *pa){
+  acquire(&kmem.lock);
+  kmem.refs[PA2IND(pa)]++;
+  if(kmem.refs[PA2IND(pa
+)] <= 0){
+    panic("kalloc: refcnt <= 0");
+  }
+  release(&kmem.lock);
 }

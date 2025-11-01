@@ -299,7 +299,7 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   pte_t *pte;
   uint64 pa, i;
   uint flags;
-  char *mem;
+  //char *mem;
 
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
@@ -307,14 +307,20 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
     if((*pte & PTE_V) == 0)
       continue;   // physical page hasn't been allocated
     pa = PTE2PA(*pte);
+	//zrus PTW_W a pridaj PTE_C u rodica aj potomka
+	if(*pte & PTE_W){
+		*pte ^= PTE_W | PTE_C; //XORUJEME LEBO 1 XOR 1 JE 0 NECHCEME WRITE LEBO SA NAM BUDE PREPISOVAT RODIC AJ DIETA
+
+	}
     flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
-      goto err;
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
+    //if((mem = kalloc()) == 0) // ZAKOMENTUJEME LEBO NECHCEME ABY SA HNED ALOKOVALA PAMAT DIETATA
+    //  goto err;
+    //memmove(mem, (char*)pa, PGSIZE);
+    if(mappages(new, i, PGSIZE, pa, flags) != 0){
+      //kfree(mem);
       goto err;
     }
+    getref((void *)pa);
   }
   return 0;
 
@@ -358,6 +364,12 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
     }
 
     pte = walk(pagetable, va0, 0);
+    if((*pte & PTE_C) != 0){
+	  if((vmfault(pagetable, va0, 0)) == 0){
+	    return -1;
+	  }
+	  pa0 = PTE2PA(*pte);
+	}
     // forbid copyout over read-only user text pages.
     if((*pte & PTE_W) == 0)
       return -1;
@@ -452,35 +464,48 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
 uint64
 vmfault(pagetable_t pagetable, uint64 va, int read)
 {
+  pte_t *pte;
   uint64 mem;
   struct proc *p = myproc();
+  int flags = PTE_W|PTE_U|PTE_R;
 
   if (va >= p->sz)
     return 0;
   va = PGROUNDDOWN(va);
-  if(ismapped(pagetable, va)) {
+  if((pte = ismapped(pagetable, va)) && !(*pte & PTE_C)) { // AK EXISTUJE MAPOVANIE A ZAROVEN V TOM MAPOVANI NEMAM NASTAVENY PTE_C TAK SA MA TO NETYKA
     return 0;
   }
+  //AK JE pte 0 jedna sa o lazy alokaciu a ak je 1 a priznak PTE_C tak sa jedna o COWFORK
   mem = (uint64) kalloc();
   if(mem == 0)
     return 0;
   memset((void *) mem, 0, PGSIZE);
-  if (mappages(p->pagetable, va, PGSIZE, mem, PTE_W|PTE_U|PTE_R) != 0) {
+  //pte nie je null urcite
+  // COW FORK pte is not null only if PTE_C
+  if(pte){
+	//skopiruj udaje do noveho ramca
+    memmove((char*)mem, (char*)PTE2PA(*pte), PGSIZE);
+	//uprav priznaky: odstran PTE_C, pridaj PTE_W
+	flags = PTE_FLAGS(*pte) ^ (PTE_W | PTE_C);
+	// odstran staru sipku
+	uvmunmap(p->pagetable, va, 1, 1);
+  }
+  if (mappages(p->pagetable, va, PGSIZE, mem, flags) != 0) {
     kfree((void *)mem);
     return 0;
   }
   return mem;
 }
 
-int
+pte_t *
 ismapped(pagetable_t pagetable, uint64 va)
 {
   pte_t *pte = walk(pagetable, va, 0);
   if (pte == 0) {
     return 0;
   }
-  if (*pte & PTE_V){
-    return 1;
+  if (*pte & PTE_V){ // chceme aby namiesto kodu vracal pte nech ju mozeme dalej otestovat ake ma priznaky a ci ma PTE_C
+    return pte;
   }
   return 0;
 }
