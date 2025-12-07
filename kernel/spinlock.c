@@ -126,12 +126,24 @@ read_acquire_inner(struct rwspinlock *rwlk)
 {
   // Replace this with your implementation.
   acquire(&rwlk->l);
+  // Čakáme, ak:
+  // 1. Niekto práve píše (writer == 1)
+  // 2. ALEBO niekto chce písať (pending_writers > 0) -> toto rieši hladovanie!
+  while (rwlk->writer == 1 || rwlk->pending_writers > 0) {
+    release(&rwlk->l);
+    // Tu sa deje "busy waiting" (krátke točenie), potom skúsime znova
+    acquire(&rwlk->l);
+  }
+  rwlk->n_readers++;
+  release(&rwlk->l);
 }
 
 static void
 read_release_inner(struct rwspinlock *rwlk)
 {
   // Replace this with your implementation.
+  acquire(&rwlk->l);
+  rwlk->n_readers--;
   release(&rwlk->l);
 }
 
@@ -140,12 +152,30 @@ write_acquire_inner(struct rwspinlock *rwlk)
 {
   // Replace this with your implementation.
   acquire(&rwlk->l);
+
+  // 1. Oznámim, že chcem písať (aby noví čitatelia nechodili dnu)
+  rwlk->pending_writers++;
+
+  // 2. Čakám, kým zámok nie je voľný
+  // Musí byť 0 čitateľov a 0 aktívnych zapisovateľov
+  while (rwlk->n_readers > 0 || rwlk->writer == 1) {
+    release(&rwlk->l);
+    acquire(&rwlk->l);
+  }
+
+  // 3. Zámok je môj
+  rwlk->pending_writers--; // Už nečakám, už idem písať
+  rwlk->writer = 1;        // Som aktívny zapisovateľ
+
+  release(&rwlk->l);
 }
 
 static void
 write_release_inner(struct rwspinlock *rwlk)
 {
   // Replace this with your implementation.
+  acquire(&rwlk->l);
+  rwlk->writer = 0;
   release(&rwlk->l);
 }
 
@@ -182,6 +212,9 @@ initrwlock(struct rwspinlock *rwlk)
 {
   // Replace this with your implementation.
   initlock(&rwlk->l, "rwlk");
+  rwlk->n_readers = 0;
+  rwlk->writer = 0;
+  rwlk->pending_writers = 0;
 }
 
 // Test rwspinlock implementation.
