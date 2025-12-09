@@ -125,6 +125,11 @@ found:
   p->pid = allocpid();
   p->state = USED;
 
+  // Initialize VMAs linked list and global state.
+  p->vma.next = &p->vma;
+  p->vma.addr = VMASTART;
+  p->vma.len = 0;
+
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
     freeproc(p);
@@ -273,6 +278,10 @@ kfork(void)
   }
   np->sz = p->sz;
 
+  // Copy VMAs.
+  if(vmacopy(p->pagetable, &p->vma, np->pagetable, &np->vma) < 0)
+    return -1;
+
   // copy saved user registers.
   *(np->trapframe) = *(p->trapframe);
 
@@ -327,6 +336,14 @@ kexit(int status)
 
   if(p == initproc)
     panic("init exiting");
+
+  // Unmap all VMAs.
+  struct vma *v = p->vma.next;
+  while(v != &p->vma){
+    struct vma *next = v->next;
+    vmaunmap(v, v->addr, v->len);
+    v = next;
+  }
 
   // Close all open files.
   for(int fd = 0; fd < NOFILE; fd++){

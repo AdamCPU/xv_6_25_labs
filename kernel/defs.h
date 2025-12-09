@@ -15,6 +15,16 @@ struct superblock;
 #ifdef LAB_LOCK
 struct rwspinlock;
 #endif
+struct vma;
+
+// vma.c
+void            vmainit(void);
+struct vma*     vmaalloc(struct vma *, uint64, uint64, struct file*);
+void            vmafree(struct vma *);
+struct vma*     vmafind(struct vma *, uint64);
+void            vmaunmap(struct vma *, uint64, uint64);
+uint64          vmafault(pagetable_t, uint64, int);
+int             vmacopy(pagetable_t, struct vma *, pagetable_t, struct vma *);
 
 // bio.c
 void            binit(void);

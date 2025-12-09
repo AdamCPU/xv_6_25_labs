@@ -54,6 +54,9 @@
 //   fixed-size stack
 //   expandable heap
 //   ...
+//   VMASTART
+//   ...
 //   TRAPFRAME (p->trapframe, used by the trampoline)
 //   TRAMPOLINE (the same page as in the kernel)
+#define VMASTART (MAXVA / 2)
 #define TRAPFRAME (TRAMPOLINE - PGSIZE)

@@ -1,0 +1,591 @@
+diff --git a/.gitignore b/.gitignore
+index 09782d9..4f90f0f 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -5,6 +5,7 @@ _*
+ *.asm
+ *.sym
+ *.img
++*.img.bk
+ vectors.S
+ bootblock
+ entryother
+@@ -27,3 +28,5 @@ barrier
+ *.pcap
+ TAGS
+ /fs.img.bk
++.vscode
++tags
+diff --git a/Makefile b/Makefile
+index e9c0cd6..3dfed19 100644
+--- a/Makefile
++++ b/Makefile
+@@ -21,6 +21,7 @@ OBJS = \
+   $K/syscall.o \
+   $K/sysproc.o \
+   $K/bio.o \
++  $K/vma.o \
+   $K/fs.o \
+   $K/log.o \
+   $K/sleeplock.o \
+diff --git a/kernel/defs.h b/kernel/defs.h
+index 3355d92..eea09c0 100644
+--- a/kernel/defs.h
++++ b/kernel/defs.h
+@@ -15,6 +15,16 @@ struct superblock;
+ #ifdef LAB_LOCK
+ struct rwspinlock;
+ #endif
++struct vma;
++
++// vma.c
++void            vmainit(void);
++struct vma*     vmaalloc(struct vma *, uint64, uint64, struct file*);
++void            vmafree(struct vma *);
++struct vma*     vmafind(struct vma *, uint64);
++void            vmaunmap(struct vma *, uint64, uint64);
++uint64          vmafault(pagetable_t, uint64, int);
++int             vmacopy(pagetable_t, struct vma *, pagetable_t, struct vma *);
+ 
+ // bio.c
+ void            binit(void);
+diff --git a/kernel/main.c b/kernel/main.c
+index f0d3171..0c04f5e 100644
+--- a/kernel/main.c
++++ b/kernel/main.c
+@@ -25,6 +25,7 @@ main()
+     plicinit();      // set up interrupt controller
+     plicinithart();  // ask PLIC for device interrupts
+     binit();         // buffer cache
++    vmainit();       // vma
+     iinit();         // inode table
+     fileinit();      // file table
+     virtio_disk_init(); // emulated hard disk
+diff --git a/kernel/memlayout.h b/kernel/memlayout.h
+index 9bc9424..44328c4 100644
+--- a/kernel/memlayout.h
++++ b/kernel/memlayout.h
+@@ -54,6 +54,9 @@
+ //   fixed-size stack
+ //   expandable heap
+ //   ...
++//   VMASTART
++//   ...
+ //   TRAPFRAME (p->trapframe, used by the trampoline)
+ //   TRAMPOLINE (the same page as in the kernel)
++#define VMASTART (MAXVA / 2)
+ #define TRAPFRAME (TRAMPOLINE - PGSIZE)
+diff --git a/kernel/param.h b/kernel/param.h
+index cd2a41c..2ba76f8 100644
+--- a/kernel/param.h
++++ b/kernel/param.h
+@@ -12,4 +12,4 @@
+ #define FSSIZE       2000  // size of file system in blocks
+ #define MAXPATH      128   // maximum file path name
+ #define USERSTACK    1     // user stack pages
+-
++#define NVMA         64  // # VMAs
+diff --git a/kernel/proc.c b/kernel/proc.c
+index 9d6cf3f..8ea38c8 100644
+--- a/kernel/proc.c
++++ b/kernel/proc.c
+@@ -125,6 +125,11 @@ found:
+   p->pid = allocpid();
+   p->state = USED;
+ 
++  // Initialize VMAs linked list and global state.
++  p->vma.next = &p->vma;
++  p->vma.addr = VMASTART;
++  p->vma.len = 0;
++
+   // Allocate a trapframe page.
+   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
+     freeproc(p);
+@@ -273,6 +278,10 @@ kfork(void)
+   }
+   np->sz = p->sz;
+ 
++  // Copy VMAs.
++  if(vmacopy(p->pagetable, &p->vma, np->pagetable, &np->vma) < 0)
++    return -1;
++
+   // copy saved user registers.
+   *(np->trapframe) = *(p->trapframe);
+ 
+@@ -328,6 +337,14 @@ kexit(int status)
+   if(p == initproc)
+     panic("init exiting");
+ 
++  // Unmap all VMAs.
++  struct vma *v = p->vma.next;
++  while(v != &p->vma){
++    struct vma *next = v->next;
++    vmaunmap(v, v->addr, v->len);
++    v = next;
++  }
++
+   // Close all open files.
+   for(int fd = 0; fd < NOFILE; fd++){
+     if(p->ofile[fd]){
+diff --git a/kernel/proc.h b/kernel/proc.h
+index d021857..e7710c5 100644
+--- a/kernel/proc.h
++++ b/kernel/proc.h
+@@ -1,3 +1,5 @@
++#include "vma.h"
++
+ // Saved registers for kernel context switches.
+ struct context {
+   uint64 ra;
+@@ -104,4 +106,8 @@ struct proc {
+   struct file *ofile[NOFILE];  // Open files
+   struct inode *cwd;           // Current directory
+   char name[16];               // Process name (debugging)
++
++  struct vma vma;              // VMA head
++                               // 1) next VMA start addr is stored in vma.addr
++                               // 2) count of the process VMAs is in vma.len
+ };
+diff --git a/kernel/riscv.h b/kernel/riscv.h
+index ef3372c..de88efd 100644
+--- a/kernel/riscv.h
++++ b/kernel/riscv.h
+@@ -360,6 +360,7 @@ typedef uint64 *pagetable_t; // 512 PTEs
+ #define PTE_W (1L << 2)
+ #define PTE_X (1L << 3)
+ #define PTE_U (1L << 4) // user can access
++#define PTE_D (1L << 7) // dirty
+ 
+ // shift a physical address to the right place for a PTE.
+ #define PA2PTE(pa) ((((uint64)pa) >> 12) << 10)
+diff --git a/kernel/syscall.c b/kernel/syscall.c
+index 076d965..c46b85b 100644
+--- a/kernel/syscall.c
++++ b/kernel/syscall.c
+@@ -101,6 +101,8 @@ extern uint64 sys_unlink(void);
+ extern uint64 sys_link(void);
+ extern uint64 sys_mkdir(void);
+ extern uint64 sys_close(void);
++extern uint64 sys_mmap(void);
++extern uint64 sys_munmap(void);
+ 
+ // An array mapping syscall numbers from syscall.h
+ // to the function that handles the system call.
+@@ -126,6 +128,8 @@ static uint64 (*syscalls[])(void) = {
+ [SYS_link]    sys_link,
+ [SYS_mkdir]   sys_mkdir,
+ [SYS_close]   sys_close,
++[SYS_mmap]    sys_mmap,
++[SYS_munmap]  sys_munmap,
+ };
+ 
+ void
+diff --git a/kernel/syscall.h b/kernel/syscall.h
+index 3dd926d..7120171 100644
+--- a/kernel/syscall.h
++++ b/kernel/syscall.h
+@@ -20,3 +20,5 @@
+ #define SYS_link   19
+ #define SYS_mkdir  20
+ #define SYS_close  21
++#define SYS_mmap   22
++#define SYS_munmap 23
+diff --git a/kernel/sysfile.c b/kernel/sysfile.c
+index d8234ce..2734e14 100644
+--- a/kernel/sysfile.c
++++ b/kernel/sysfile.c
+@@ -503,3 +503,81 @@ sys_pipe(void)
+   }
+   return 0;
+ }
++
++/*
++ * mmap(addr, len, prot, flags, fd, offset)
++ *
++ * Creates a new mapping in the virtual address space of the calling process.
++ * The starting address for the new mapping is specified in `addr'. You can
++ * assume that `addr' will always be zero. If the `addr' is 0, the kernel
++ * chooses the page-aligned address at which create the mapping. The address
++ * of the new mapping is returned as the result of the call.
++ *
++ * The `length' argument specifies the length of the mapping (which must be
++ * greater than 0).
++ *
++ * The contents of a mapping are initialized using `length' bytes starting at
++ * `offset' in the file referred to by the file descriptor `fd'. `offset' must
++ * be a multiple of the PGSIZE, but you can assume `offset' is in this lab
++ * always zero.
++ *
++ * After the `mmap()' call has returned, the file descriptor `fd' can be closed
++ * immediately without invalidating the mapping.
++ *
++ * The `prot' argument describes the desired memory protection of the mapping
++ * (and must not conflict with the open mode of the file). You can assume that
++ * `prot' is PROT_READ (pages may be read) or PROT_WRITE (pages may be written)
++ * or both. On RISC-V architecture, `PROT_WRITE' implies `PROT_READ'.
++ *
++ * The `flags' argument determines whether updates to the mapping are carried
++ * through to the underlying file:
++ * 1) `MAP_SHARED' -- Share this mapping. Updates to the mapping are carried
++ *     through to the underlying file.
++ * 2) `MAP_PRIVATE' -- Create a private copy-on-write mapping. Updates to the
++ *    mapping are not carried through to the underlying file. It is unspecified
++ *    whether changes made to the file after mmap() call are visible in the
++ *    mapped region.
++ *
++ * Memory mapped by mmap() is preserved accross fork(), with the same
++ * attributes.
++ *
++ * A file is mapped in **multiples** of PGSIZE. For a file that is not a
++ * multiple of the page size, the remaining bytes in the partial page at the
++ * end of the mapping are zeroed when mapped. Modifications to that region
++ * are not written out to the file. The effect of changing the size of the
++ * underlying file of a mapping on the pages that correspond to added or
++ * removed regions of the file is unspecified.
++ *
++ * On success, sys_mmap() returns a pointer to the mapped area. On error, -1 is
++ * returned.
++ */
++uint64
++sys_mmap(void)
++{
++  // YOUR CODE HERE.
++
++  return -1;
++}
++
++/*
++ * munmap(addr, len)
++ *
++ * Deletes the mappings for the specific address range, and causes further
++ * references to addresses within the range to generate invalid memory
++ * references.
++ *
++ * The address `addr' must be a multiple of PGSIZE, but `len' need not be.
++ * All pages containing **a part** of the indicated range are unmapped, and
++ * subsequent references to these pages will generate a page fault.
++ *
++ * It is not an error if the indicated range does not contain any mapped pages.
++ *
++ * On success, sys_munmap() returns 0. On failure it returns -1.
++ */
++uint64
++sys_munmap(void)
++{
++  // YOUR CODE HERE.
++
++  return -1;
++}
+diff --git a/kernel/vm.c b/kernel/vm.c
+index 28f4248..1b716e2 100644
+--- a/kernel/vm.c
++++ b/kernel/vm.c
+@@ -455,6 +455,9 @@ vmfault(pagetable_t pagetable, uint64 va, int read)
+   uint64 mem;
+   struct proc *p = myproc();
+ 
++  if(vmafind(&p->vma, va))
++    return vmafault(pagetable, va, !read);
++
+   if (va >= p->sz)
+     return 0;
+   va = PGROUNDDOWN(va);
+diff --git a/kernel/vma.c b/kernel/vma.c
+new file mode 100644
+index 0000000..dc5e4ae
+--- /dev/null
++++ b/kernel/vma.c
+@@ -0,0 +1,243 @@
++#include "types.h"
++#include "param.h"
++#include "spinlock.h"
++#include "riscv.h"
++#include "proc.h"
++#include "defs.h"
++#include "fs.h"
++#include "sleeplock.h"
++#include "file.h"
++#include "fcntl.h"
++#include "vma.h"
++
++struct {
++  struct spinlock lock;
++  struct vma vmas[NVMA];
++  struct vma *freelist;
++} vma;
++
++// Initialize VMA subsystem.
++void
++vmainit(void)
++{
++  // Init VMA subsystem lock.
++  initlock(&vma.lock, "vma");
++
++  // Create list of free VMA structs.
++  for(struct vma *v = vma.vmas; v < vma.vmas+NVMA; v++){
++    v->next = vma.freelist;
++    vma.freelist = v;
++  }
++}
++
++// Allocate a new VMA struct from the global system VMA list.
++// Initialize the length `len' of the VMA, duplicate the filedescriptor
++// `fd' and set the base address of the new VMA based on the hint `addr'.
++struct vma*
++vmaalloc(struct vma *head, uint64 addr, uint64 len, struct file *fd)
++{
++  struct vma *v;
++
++  // Remove VMA from the freelist.
++  acquire(&vma.lock);
++  v = vma.freelist;
++  if(!v)
++    panic("vmalloc: no vmas");
++  vma.freelist = v->next;
++  release(&vma.lock);
++
++  // Translate zero `addr' to the base of the process next VMA, stored in
++  // the `head->addr' field.
++  if(!addr)
++    addr = head->addr;
++  // Check for an address hint. If `addr' is not 0, is above VMASTART and
++  // interval <addr; addr+len) is not colliding with any existing process
++  // VMA, use it. Otherwise, use the address stored in head of process VMA
++  // list.
++  for(struct vma *v = head->next; addr != head->addr && v != head; v = v->next){
++    if((v->addr <= addr && v->addr + v->len > addr) ||
++        (v->addr < addr + len && v->addr + len >= addr + len))
++      addr = head->addr;
++  }
++
++  // Initialize VMA: len, fd and addr.
++  v->len = len;
++  v->fd = filedup(fd);
++  v->addr = addr;
++
++  // Update process VMA head:
++  // 1) Update the base of the next process VMA.
++  // 2) Update the count of process VMAs.
++  if(head->addr < v->addr)
++    head->addr = v->addr;
++  head->addr += PGROUNDUP(len);
++  head->len++;
++
++  // Add VMA to the process VMA list.
++  v->next = head->next;
++  head->next = v;
++
++  return v;
++}
++
++// Add VMA `v' to the system VMAs list, close the file used by this VMA.
++void
++vmafree(struct vma *v)
++{
++  struct proc *p = myproc();
++  struct vma *vv;
++
++  // Remove VMA from process VMA list.
++  for(vv = &p->vma; vv->next != v; vv = vv->next){
++    if(vv->next == &p->vma)
++      panic("vmfree");
++  }
++  vv->next = v->next;
++
++  // Close the backend file, first sanity check.
++  if(!v->fd)
++    panic("vmafree: VMA not backend by a file");
++  fileclose(v->fd);
++
++  // Add VMA to the free VMA list.
++  acquire(&vma.lock);
++  v->next = vma.freelist;
++  vma.freelist = v;
++  release(&vma.lock);
++
++  // Update count of process VMAs.
++  p->vma.len--;
++}
++
++// Find the VMA based on the virtual address `addr'. The list of VMAs
++// whose head is stored in `head' is searched.
++// Return 0 if the VMA is not found, address of the corresponding VMA
++// struct otherwise.
++struct vma *
++vmafind(struct vma *head, uint64 addr)
++{
++  for(struct vma *v = head->next; v != head; v = v->next){
++    if(v->addr <= addr && addr < v->addr+v->len){
++      return v;
++    }
++  }
++  return 0;
++}
++
++// Copy all VMAs of the parent process `p' stored in head `pvma' into list
++// `chvma' of the child process `ch'.
++// Return -1 on error, 0 otherwise.
++int vmacopy(pagetable_t p, struct vma *pvma, pagetable_t ch, struct vma *chvma)
++{
++  struct vma *vv;
++  char *mem;
++
++  // For each VMA in the parent.
++  for(struct vma *v = pvma->next; v != pvma; v = v->next){
++    // Allocate a new VMA and fill it; use address hint `addr'.
++    vv = vmaalloc(chvma, v->addr, v->len, v->fd);
++    vv->prot = v->prot;
++    vv->flags = v->flags;
++    vv->offset = v->offset;
++
++    // Map and copy mapped pages in the parent's VMA.
++    for(uint64 a = vv->addr; a < vv->addr + vv->len; a += PGSIZE){
++      // Skip not mapped pages.
++      pte_t *pte = walk(p, a, 0);
++      if(!pte || !(*pte & PTE_V))
++        continue;
++
++      // Allocate memory, copy the data from the parent into the child and map
++      // the page into child's VAP.
++      if((mem = kalloc()) == 0)
++        goto vmacopy_bad;
++      memmove(mem, (void*)PTE2PA(*pte), PGSIZE);
++      if (mappages(ch, a, PGSIZE, (uint64)mem, PTE_FLAGS(*pte)) != 0)
++        goto vmacopy_bad;
++    }
++  }
++
++  return 0;
++
++vmacopy_bad:
++  // Release resources in case of failure.
++  if(mem)
++    kfree(mem);
++  vmaunmap(vv, vv->addr, vv->len);
++  return -1;
++}
++
++// Unmap a memory region of VMA `v' starting at `addr' of length `len'.
++// It is not an error if the region does not contain mapped page(s).
++// Modifications to region behind the file length shouldn't be written
++// back to the file.
++// You can assume that the region will either unmap at the start, or at the
++// end, or the whole region (but not punch a hole in the middle of the
++// region).
++void
++vmaunmap(struct vma *v, uint64 addr, uint64 len)
++{
++  uint64 real_len = len;
++
++  // If `len' go behind the file length, correct it.
++  if((addr - v->addr + v->offset) + real_len > v->fd->ip->size)
++    real_len = v->fd->ip->size - (addr - v->addr + v->offset);
++  // If `addr' itself is behind the file length, the result `real_len' will
++  // be a negative number. But, as `real_len' is an unsigned long, the value
++  // of `real_len' will be actually greater than `len'. So, correct it.
++  if(real_len > len)
++    real_len = 0;
++
++  // Walk the indicated range, if any.
++  for(uint64 i = 0; i < real_len; i += PGSIZE){
++    // Skip non-mapped pages.
++    pte_t *pte = walk(myproc()->pagetable, addr + i, 0);
++    if(!pte)
++      continue;
++
++    // Write back changes to the file.
++    if((v->flags & MAP_SHARED) && (v->prot & PROT_WRITE) && (PTE_FLAGS(*pte) & PTE_D)){
++      // A file is mapped in multiples of PGSIZE. For a file that is not a
++      // multiple of the page size, the remaining bytes in the partial page
++      // at the end of the mapping are zeroed when mapped. Modifications to
++      // that region are not written out to the file.
++      int n = real_len - i > PGSIZE ? PGSIZE : real_len - i;
++
++      // Write changes to the file.
++      begin_op();
++      ilock(v->fd->ip);
++      writei(v->fd->ip, 1, addr + i, v->offset + (addr - v->addr) + i, n);
++      iunlock(v->fd->ip);
++      end_op();
++    }
++
++    // Unmap the corresponding page and free it.
++    uvmunmap(myproc()->pagetable, addr + i, 1, 1);
++  }
++
++  // Update the VMA interval.
++  if(addr == v->addr){
++    v->addr += PGROUNDUP(len);
++    v->offset += PGROUNDUP(len);
++    v->len = v->len > PGROUNDUP(len) ? v->len - PGROUNDUP(len) : 0;
++  } else if(addr+len == v->addr+v->len){
++    v->len -= len;
++  } else
++    panic("vmamunmap(): punch a hole in the middle of the region");
++
++  // Check if the VMA is exhausted. If so, free it.
++  if(!v->len)
++    vmafree(v);
++}
++
++// Handle page fault in the VMA. The function is called from vmfault() if `va'
++// belongs to a VMA. So there is no need to check this again.
++//
++// Return 0 on failure, physical addr otherwise.
++uint64
++vmafault(pagetable_t pagetable, uint64 va, int write)
++{
++  // YOUR CODE HERE.
++
++  return 0;
++}
+diff --git a/kernel/vma.h b/kernel/vma.h
+new file mode 100644
+index 0000000..5f83a53
+--- /dev/null
++++ b/kernel/vma.h
+@@ -0,0 +1,21 @@
++#ifndef __VMA__
++#define __VMA__
++
++struct file;
++
++struct vma {
++  // VMA can be either in system VMAs freelist or in a process VMAs list.
++  struct vma *next;
++
++  // Set by vmaalloc().
++  uint64 addr;
++  uint64 len;
++  struct file *fd;
++
++  // Set by user.
++  int prot;
++  int flags;
++  uint64 offset;
++};
++
++#endif
+diff --git a/user/user.h b/user/user.h
+index df8df7c..22fce9c 100644
+--- a/user/user.h
++++ b/user/user.h
+@@ -44,6 +44,8 @@ void kpgtbl(void);
+ int rwlktest(void);
+ int cpupin(int);
+ #endif
++void *mmap(void *addr, uint64 len, int prot, int flags, int fd, uint64 offset);
++int munmap(void *addr, uint64 len);
+ 
+ // ulib.c
+ int stat(const char*, struct stat*);
+diff --git a/user/usys.pl b/user/usys.pl
+index c5d4c3a..545a5dd 100755
+--- a/user/usys.pl
++++ b/user/usys.pl
+@@ -42,3 +42,5 @@ entry("getpid");
+ entry("sbrk");
+ entry("pause");
+ entry("uptime");
++entry("mmap");
++entry("munmap");

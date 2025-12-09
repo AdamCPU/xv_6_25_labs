@@ -503,3 +503,81 @@ sys_pipe(void)
   }
   return 0;
 }
+
+/*
+ * mmap(addr, len, prot, flags, fd, offset)
+ *
+ * Creates a new mapping in the virtual address space of the calling process.
+ * The starting address for the new mapping is specified in `addr'. You can
+ * assume that `addr' will always be zero. If the `addr' is 0, the kernel
+ * chooses the page-aligned address at which create the mapping. The address
+ * of the new mapping is returned as the result of the call.
+ *
+ * The `length' argument specifies the length of the mapping (which must be
+ * greater than 0).
+ *
+ * The contents of a mapping are initialized using `length' bytes starting at
+ * `offset' in the file referred to by the file descriptor `fd'. `offset' must
+ * be a multiple of the PGSIZE, but you can assume `offset' is in this lab
+ * always zero.
+ *
+ * After the `mmap()' call has returned, the file descriptor `fd' can be closed
+ * immediately without invalidating the mapping.
+ *
+ * The `prot' argument describes the desired memory protection of the mapping
+ * (and must not conflict with the open mode of the file). You can assume that
+ * `prot' is PROT_READ (pages may be read) or PROT_WRITE (pages may be written)
+ * or both. On RISC-V architecture, `PROT_WRITE' implies `PROT_READ'.
+ *
+ * The `flags' argument determines whether updates to the mapping are carried
+ * through to the underlying file:
+ * 1) `MAP_SHARED' -- Share this mapping. Updates to the mapping are carried
+ *     through to the underlying file.
+ * 2) `MAP_PRIVATE' -- Create a private copy-on-write mapping. Updates to the
+ *    mapping are not carried through to the underlying file. It is unspecified
+ *    whether changes made to the file after mmap() call are visible in the
+ *    mapped region.
+ *
+ * Memory mapped by mmap() is preserved accross fork(), with the same
+ * attributes.
+ *
+ * A file is mapped in **multiples** of PGSIZE. For a file that is not a
+ * multiple of the page size, the remaining bytes in the partial page at the
+ * end of the mapping are zeroed when mapped. Modifications to that region
+ * are not written out to the file. The effect of changing the size of the
+ * underlying file of a mapping on the pages that correspond to added or
+ * removed regions of the file is unspecified.
+ *
+ * On success, sys_mmap() returns a pointer to the mapped area. On error, -1 is
+ * returned.
+ */
+uint64
+sys_mmap(void)
+{
+  // YOUR CODE HERE.
+
+  return -1;
+}
+
+/*
+ * munmap(addr, len)
+ *
+ * Deletes the mappings for the specific address range, and causes further
+ * references to addresses within the range to generate invalid memory
+ * references.
+ *
+ * The address `addr' must be a multiple of PGSIZE, but `len' need not be.
+ * All pages containing **a part** of the indicated range are unmapped, and
+ * subsequent references to these pages will generate a page fault.
+ *
+ * It is not an error if the indicated range does not contain any mapped pages.
+ *
+ * On success, sys_munmap() returns 0. On failure it returns -1.
+ */
+uint64
+sys_munmap(void)
+{
+  // YOUR CODE HERE.
+
+  return -1;
+}
