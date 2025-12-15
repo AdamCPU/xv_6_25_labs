@@ -554,9 +554,56 @@ sys_pipe(void)
 uint64
 sys_mmap(void)
 {
-  // YOUR CODE HERE.
+  uint64 addr, len, offset;
+  int prot, flags;
+  struct file *fd;
 
-  return -1;
+  argaddr(0, &addr);
+  argaddr(1, &len);
+  argint(2, &prot);
+  argint(3, &flags);
+  if(argfd(4, 0, &fd) < 0)
+    return -1;
+  argaddr(5, &offset);
+
+  // addr musi byt vzdy 0
+  if(addr)
+    return -1;
+
+  // len nesmie byt 0
+  if(!len)
+    return -1;
+
+  // prot je bud PROT_READ, alebo PROT_WRITE, alebo oboje
+  //if(!prot || (prot & ~(PROT_READ | PROT_WRITE)))
+  if(prot != PROT_READ && prot != PROT_WRITE && prot != (PROT_READ | PROT_WRITE))
+    return -1;
+  // na risc-v architekture, ked je PROT_WRITE, musi byt aj PROT_READ
+  if(prot & PROT_WRITE)
+    prot |= PROT_READ;
+
+  // flags je bud MAP_SHARED alebo MAP_PRIVATE
+  if(flags != MAP_SHARED && flags != MAP_PRIVATE)
+    return -1;
+
+  // offset musi byt vzdy 0
+  if(offset)
+    return -1;
+
+  // ak chceme mapovanie MAP_SHARED s pristupom PROT_WRITE, ale subor nie je
+  // otvoreny na zapis, je to chyba
+  if(flags & MAP_SHARED && prot & PROT_WRITE && !fd->writable)
+    return -1;
+
+  // alokuj novu strukturu VMA
+  struct vma *v = vmaalloc(&myproc()->vma, addr, len, fd);
+  // inicializuj zvysne polozky vma struktury
+  v->prot = prot;
+  v->flags = flags;
+  v->offset = offset;
+
+  // vrat zaciatocnu adresu vma
+  return v->addr;
 }
 
 /*
@@ -577,7 +624,31 @@ sys_mmap(void)
 uint64
 sys_munmap(void)
 {
-  // YOUR CODE HERE.
-
-  return -1;
+  uint64 addr, len;
+  argaddr(0,&addr);
+  argaddr(1,&len);
+  if(addr%PGSIZE){
+    return -1;
+  }
+  struct proc *p = myproc();
+  struct vma *vma = vmafind(&p->vma, addr);
+  if(len == 0 || vma == 0){
+    return 0;
+  }
+  if(addr<vma->addr || addr+len > vma->addr + vma->len){
+    return -1;
+  }
+  vmaunmap(vma, addr, len);
+  uint64 unmap_len = PGROUNDUP(len);
+  if(addr == vma->addr && unmap_len >= vma->len){
+    fileclose(vma->fd);
+    vmafree(vma);
+  }else if(addr == vma->addr){
+    vma->addr += unmap_len;
+    vma->len -= unmap_len;
+    vma->offset += unmap_len;
+  }else if(addr+unmap_len >=vma->addr + vma->len){
+    vma->len = addr - vma->addr;
+  }
+  return 0;
 }

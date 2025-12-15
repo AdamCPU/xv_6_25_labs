@@ -237,7 +237,40 @@ vmaunmap(struct vma *v, uint64 addr, uint64 len)
 uint64
 vmafault(pagetable_t pagetable, uint64 va, int write)
 {
-  // YOUR CODE HERE.
+  // najdi prislusnu vma
+  struct vma *vma = vmafind(&myproc()->vma, va);
+
+  // je opravneny typ pristupu?
+  if(write && !(vma->prot & PROT_WRITE))
+    return 0;
+
+  // alokuj 1 ramec RAM
+  uint64 mem = (uint64)kalloc();
+  if(!mem)
+    return 0;
+
+  // vynuluj ho
+  memset((void*)mem, 0, PGSIZE);
+
+  // nakopiruj udaje zo suboru
+  ilock(vma->fd->ip);
+  uint off = PGROUNDDOWN(va) - vma->addr + vma->offset;
+  readi(vma->fd->ip, 0, mem, off, PGSIZE);
+  iunlock(vma->fd->ip);
+
+  // namapuj ramec na stranku, kde vznikol vypadok
+  int flags = PTE_U;
+  if(vma->prot & PROT_READ)
+    flags |= PTE_R;
+  if(vma->prot & PROT_WRITE)
+    flags |= PTE_W;
+  if(mappages(pagetable, PGROUNDDOWN(va), PGSIZE, mem, flags) != 0){
+    kfree((void*)mem);
+    return 0;
+  }
+
+  // vrat adresu alokovaneho ramca
+  return mem;
 
   return 0;
 }

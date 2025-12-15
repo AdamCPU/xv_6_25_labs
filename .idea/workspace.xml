@@ -21,17 +21,9 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="996c1586-d83b-406c-9378-318b74c91a4e" name="Changes" comment="">
-      <change beforePath="$PROJECT_DIR$/Makefile" beforeDir="false" afterPath="$PROJECT_DIR$/Makefile" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/kernel/fcntl.h" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/fcntl.h" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/kernel/file.h" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/file.h" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/kernel/fs.c" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/fs.c" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/kernel/fs.h" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/fs.h" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/kernel/stat.h" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/stat.h" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/kernel/syscall.c" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/syscall.c" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/kernel/syscall.h" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/syscall.h" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/kernel/sysfile.c" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/sysfile.c" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/user/user.h" beforeDir="false" afterPath="$PROJECT_DIR$/user/user.h" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/user/usys.pl" beforeDir="false" afterPath="$PROJECT_DIR$/user/usys.pl" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/kernel/vma.c" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/vma.c" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -108,7 +100,7 @@
     &quot;RunOnceActivity.readMode.enableVisualFormatting&quot;: &quot;true&quot;,
     &quot;cf.first.check.clang-format&quot;: &quot;false&quot;,
     &quot;cidr.known.project.marker&quot;: &quot;true&quot;,
-    &quot;git-widget-placeholder&quot;: &quot;fs&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;mmap&quot;,
     &quot;ignore.virus.scanning.warn.message&quot;: &quot;true&quot;,
     &quot;last_opened_file_path&quot;: &quot;//wsl.localhost/Ubuntu/home/adi/xv6-labs-2025&quot;,
     &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
@@ -138,7 +130,7 @@
       <workItem from="1765067049557" duration="77000" />
       <workItem from="1765099678984" duration="22018000" />
       <workItem from="1765183950498" duration="34447000" />
-      <workItem from="1765276345189" duration="4203000" />
+      <workItem from="1765276345189" duration="5177000" />
     </task>
     <servers />
   </component>
